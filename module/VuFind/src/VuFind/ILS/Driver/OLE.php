@@ -97,12 +97,17 @@ class OLE extends AbstractBase implements \VuFindHttp\HttpServiceAwareInterface
      * item_available_codes, the value from ole_dlvr_item_avail_stat_t that indicates that an item is available. All other codes are reflect as unavailable.
      */
     protected $item_available_codes;
-    
+
     /**
      * OLE's default sort for checked out items in user account section. 
      */
     protected $coiSort;
-    
+
+    /**
+     * Pickup location codes and display names.
+     */
+    protected $pickupLocations; 
+
     /**
      * Set the HTTP service to be used for HTTP requests.
      *
@@ -189,10 +194,13 @@ class OLE extends AbstractBase implements \VuFindHttp\HttpServiceAwareInterface
         $this->operatorId = $this->config['Catalog']['operatorId'];
         
         // Define OLE's available code status
-        $this->item_available_codes = explode(":", $this->config['Catalog']['item_available_code']);       
- 
+        $this->item_available_codes = explode(":", $this->config['Catalog']['item_available_code']);
+
         // Define OLE's default sort for checked out items 
         $this->coiSort = $this->config['UserAccount']['checkedOutItemsSort'];
+
+        // Define pickup location codes and display names
+        $this->pickupLocations = $this->config['Catalog']['pickup_locations'];
  
         try {
             if ($this->dbvendor == 'oracle') {
@@ -408,11 +416,11 @@ class OLE extends AbstractBase implements \VuFindHttp\HttpServiceAwareInterface
                 JOIN ole_ds_bib_t bib ON bib.BIB_ID = h.BIB_ID
                     WHERE p.library_id = :barcode 
                         AND i.CURRENT_BORROWER = p.id';
-        try {
+         try {
             /*Query the database*/
             $stmt = $this->db->prepare($sql);
             $stmt->execute(array(':barcode' => $patron['barcode']));
-            
+
             while ($row = $stmt->fetch()) {
                 $processRow = $this->processMyTransactionsData($row, $patron);
                 $transList[] = $processRow;
@@ -436,7 +444,7 @@ class OLE extends AbstractBase implements \VuFindHttp\HttpServiceAwareInterface
                 /*Alphabetical*/
                 usort($transList, function($a, $b){ return strcasecmp(preg_replace('/[^ \w]+/', '', $a['title']), preg_replace('/[^ \w]+/', '', $b['title'])); });
         }
-        
+
         return $transList;
     }
 
@@ -615,7 +623,7 @@ class OLE extends AbstractBase implements \VuFindHttp\HttpServiceAwareInterface
         $availableDateTime = (string) $itemXml->availableDate;
         $available = ($availableDateTime <= date('Y-m-d')) ? true:false;
         // JEJ CHANGE
-		// Did the API change to return a string instead of date? (DL)
+        // Did the API change to return a string instead of date? (DL)
         $available = ((string) $itemXml->availableStatus == 'ONHOLD') ?  true:false;
 
         return array(
@@ -657,7 +665,7 @@ class OLE extends AbstractBase implements \VuFindHttp\HttpServiceAwareInterface
         $dueStatus = ($row['overdue_notices_count'] > 0) ? "overdue" : "";
         
         $xml = simplexml_load_string($row['bib_data']);
-        
+
         $title = ''; 
         foreach($xml->record->xpath('*') as $field) {
             if ($field->attributes() == '245') {
@@ -667,7 +675,7 @@ class OLE extends AbstractBase implements \VuFindHttp\HttpServiceAwareInterface
 
         /*See if item is on indefinite loan.*/
         $isIndefiniteLoan = strlen($dueDate) < 1;
-        
+
         $transactions = array(
             'id' => $row['bib_num'],
             'item_id' => $row['item_id'],
@@ -690,10 +698,10 @@ class OLE extends AbstractBase implements \VuFindHttp\HttpServiceAwareInterface
 
         $transactions['renewable'] = $renewData['renewable'];
         $transactions['message'] = $isIndefiniteLoan == false ? $renewData['message'] : null;
-        
+ 
         return $transactions;
     }
-    
+
     /* TODO: document this */
     public function getRecord($id)
     {
@@ -1043,21 +1051,21 @@ class OLE extends AbstractBase implements \VuFindHttp\HttpServiceAwareInterface
         $sql = 'SELECT r.INSTANCE_ID, SUBSTRING(r.UNBOUND_LOC,  SUBSTRING_INDEX(r.UNBOUND_LOC, \'/\', -1) + LOCATE(\'/\', REVERSE(r.UNBOUND_LOC)) + 1 )  AS unbound_shelving_loc, 
                 s.SER_RCPT_HIS_REC_ID, s.SER_RCV_REC_ID, s.RCV_REC_TYP,
                    CONCAT_WS(" ", s.ENUM_LVL_1, s.ENUM_LVL_2, s.ENUM_LVL_3, s.ENUM_LVL_4, s.ENUM_LVL_5, s.ENUM_LVL_6) AS enum,
-                   if(LEFT(s.CHRON_LVL_1,1)=\'(\' || LENGTH(s.CHRON_LVL_1) = 0, 
-                      s.CHRON_LVL_1, 
+                   if(LEFT(s.CHRON_LVL_1,1)=\'(\' || LENGTH(s.CHRON_LVL_1) = 0,
+                      s.CHRON_LVL_1,
                       CONCAT(\'(\', CONCAT_WS(": ", s.CHRON_LVL_1, CONCAT_WS(" ", s.CHRON_LVL_2, s.CHRON_LVL_3, s.CHRON_LVL_4)), \')\')
                    ) AS chron,
                    (SELECT loc.LOCN_NAME
                         FROM ole_locn_t loc
                         WHERE loc.LOCN_CD = unbound_shelving_loc
                     ) AS unbound_loc_name,
-                   s.SER_RCPT_NOTE, 
+                   s.SER_RCPT_NOTE,
                    s.PUB_RCPT AS note
-                    FROM ole_ser_rcv_his_rec s
-                JOIN ole_ser_rcv_rec r ON r.SER_RCV_REC_ID = s.SER_RCV_REC_ID
-                    where s.PUB_DISPLAY = "Y"
-                        and r.INSTANCE_ID = :holdingId';
-       
+                   FROM ole_ser_rcv_his_rec s
+                        JOIN ole_ser_rcv_rec r ON r.SER_RCV_REC_ID = s.SER_RCV_REC_ID
+                            where s.PUB_DISPLAY = "Y"
+                                and r.INSTANCE_ID = :holdingId';
+ 
         /*Return array*/
         $items = array();
 
@@ -1257,16 +1265,16 @@ class OLE extends AbstractBase implements \VuFindHttp\HttpServiceAwareInterface
         $bibId = $holdDetails['id'];
         $itemBarcode = $holdDetails['barcode'];
         $patronBarcode = $patron['barcode'];
-        
-        $uri = $this->circService . "?service={$service}&patronBarcode={$patronBarcode}&operatorId={$this->operatorId}&itemBarcode={$itemBarcode}&requestType={$requestType}";
-        //var_dump($uri);
+        $pickupLocation = $holdDetails['pickUpLocation'];
+
+        $uri = $this->circService .  "?service={$service}&patronBarcode={$patronBarcode}&operatorId={$this->operatorId}&itemBarcode={$itemBarcode}&requestType={$requestType}&pickupLocation={$pickupLocation}";
         
         $request = new Request();
         $request->setMethod(Request::METHOD_POST);
         $request->setUri($uri);
 
         $client = new Client();
-        $client->setOptions(array('timeout' => 30));
+        $client->setOptions(array('timeout' => 120));
 
         try {
             $response = $client->dispatch($request);
@@ -1315,12 +1323,15 @@ class OLE extends AbstractBase implements \VuFindHttp\HttpServiceAwareInterface
     /* TODO: config this using options from OLE */
     public function getPickUpLocations($patron = false, $holdDetails = null)
     {
-
-        $pickResponse[] = array(
-            "locationID" => '1',
-            "locationDisplay" => 'Location 1'
-        );
-
+        $responses = explode('|', $this->pickupLocations);
+        $pickResponse = array();
+        $i = 0;
+        foreach ($responses as $response) {
+            $response = explode(':', $response);
+            $pickResponse[$i]['locationID'] = $response[0];
+            $pickResponse[$i]['locationDisplay'] = $response[1];
+            $i++;
+        }
         return $pickResponse;
     }
     
